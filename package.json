@@ -1,17 +1,15 @@
 {
   "name": "tiktok-downloader",
   "version": "1.0.0",
-  "description": "TikTok Video Downloader HD tanpa Watermark",
+  "description": "TikTok & YouTube Downloader HD",
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "scripts": {
-  "build": "pip install yt-dlp --break-system-packages || pip3 install yt-dlp --break-system-packages || true",
-  "start": "node server.js",
-  "dev": "node --watch server.js"
-    }
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "yt-dlp-exec": "^1.0.2"
   }
 }
