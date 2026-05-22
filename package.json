@@ -9,6 +9,7 @@
   "build": "pip install yt-dlp --break-system-packages || pip3 install yt-dlp --break-system-packages || true",
   "start": "node server.js",
   "dev": "node --watch server.js"
+    }
   },
   "dependencies": {
     "express": "^4.19.2"
