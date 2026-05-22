@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TikSave — TikTok & YouTube Downloader HD</title>
+  <meta name="description" content="Download video TikTok HD tanpa watermark & YouTube MP4/MP3 gratis.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <div class="glass-bg-effects">
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+  </div>
+
+  <main class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo-wrapper">
+        <div class="tiktok-icon-mock"><span>T</span></div>
+        <h1>Tik<span>Save</span></h1>
+      </div>
+      <p class="tagline">Download TikTok HD Tanpa Watermark & YouTube MP4/MP3</p>
+
+      <!-- Platform Tabs -->
+      <div class="platform-tabs">
+        <button class="ptab active" id="tabTikTok" onclick="switchPlatform('tiktok')">
+          <i data-lucide="music-2"></i> TikTok
+        </button>
+        <button class="ptab" id="tabYouTube" onclick="switchPlatform('youtube')">
+          <i data-lucide="youtube"></i> YouTube
+        </button>
+      </div>
+    </header>
+
+    <!-- Form Input -->
+    <section class="downloader-form-section">
+      <form id="downloadForm" class="download-form">
+        <div class="input-wrapper">
+          <i data-lucide="link" class="input-icon"></i>
+          <input
+            type="url"
+            id="videoUrl"
+            placeholder="Tempel tautan TikTok atau YouTube di sini..."
+            required
+            autocomplete="off"
+          >
+          <button type="button" id="clearBtn" class="clear-btn" aria-label="Hapus input" style="display:none;">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <button type="submit" class="submit-btn">
+          <span class="btn-text">Ambil Video</span>
+          <i data-lucide="arrow-right" class="btn-icon"></i>
+        </button>
+      </form>
+    </section>
+
+    <!-- Loading State -->
+    <section id="loadingState" class="loading-state" style="display:none;">
+      <div class="spinner-wrapper">
+        <div class="spinner"></div>
+        <div class="spinner-core"></div>
+      </div>
+      <p id="loadingText">Sedang menganalisis video...</p>
+    </section>
+
+    <!-- Error State -->
+    <section id="errorState" class="error-state" style="display:none;">
+      <div class="error-card">
+        <i data-lucide="alert-circle" class="error-icon"></i>
+        <h3>Terjadi Kesalahan</h3>
+        <p id="errorMessage">Link tidak valid atau server sedang sibuk.</p>
+        <button type="button" id="errorCloseBtn" class="retry-btn">Coba Lagi</button>
+      </div>
+    </section>
+
+    <!-- ═══ TIKTOK Result ═══ -->
+    <section id="resultState" class="result-state" style="display:none;">
+      <div class="result-grid">
+        <div class="preview-card glass-panel">
+          <div class="video-cover-container">
+            <img id="videoCover" src="" alt="Video Cover">
+            <div class="play-overlay"><i data-lucide="play" class="play-icon"></i></div>
+            <div class="views-badge">
+              <i data-lucide="play" class="mini-icon"></i>
+              <span id="playCount">0</span>
+            </div>
+          </div>
+          <div class="author-info">
+            <img id="authorAvatar" src="" alt="Avatar" class="avatar">
+            <div class="author-details">
+              <h4 id="authorName">Nama Author</h4>
+              <p id="authorUsername">@username</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="download-card glass-panel">
+          <div class="meta-section">
+            <h3 class="video-title-label">Deskripsi Video</h3>
+            <p id="videoTitle" class="video-title">Judul video...</p>
+            <div class="stats-row">
+              <div class="stat-item">
+                <i data-lucide="heart" class="stat-icon-heart"></i>
+                <span id="likeCount">0</span>
+              </div>
+              <div class="stat-item">
+                <i data-lucide="message-square" class="stat-icon-comment"></i>
+                <span id="commentCount">0</span>
+              </div>
+              <div class="stat-item">
+                <i data-lucide="share-2" class="stat-icon-share"></i>
+                <span id="shareCount">0</span>
+              </div>
+            </div>
+          </div>
+          <div class="download-options">
+            <h3>Pilih Format Download</h3>
+            <div class="buttons-stack">
+              <a id="downloadHD" href="#" class="dl-btn dl-primary">
+                <div class="dl-btn-content">
+                  <i data-lucide="download"></i>
+                  <div class="text-group">
+                    <span class="main-text">Download Video HD</span>
+                    <span class="sub-text">Tanpa Watermark (Kualitas Terbaik)</span>
+                  </div>
+                </div>
+                <span class="badge">HD</span>
+              </a>
+              <a id="downloadWatermark" href="#" class="dl-btn dl-secondary">
+                <div class="dl-btn-content">
+                  <i data-lucide="download-cloud"></i>
+                  <div class="text-group">
+                    <span class="main-text">Download Video Biasa</span>
+                    <span class="sub-text">Tanpa Watermark (Resolusi Standar)</span>
+                  </div>
+                </div>
+                <span class="badge gray">SD</span>
+              </a>
+              <a id="downloadMP3" href="#" class="dl-btn dl-audio">
+                <div class="dl-btn-content">
+                  <i data-lucide="music"></i>
+                  <div class="text-group">
+                    <span class="main-text">Download Audio MP3</span>
+                    <span class="sub-text">Musik Latar Belakang (.mp3)</span>
+                  </div>
+                </div>
+                <span class="badge audio">MP3</span>
+              </a>
+              <a id="downloadOriginal" href="#" class="dl-btn dl-outline" style="display:none;">
+                <div class="dl-btn-content">
+                  <i data-lucide="video"></i>
+                  <div class="text-group">
+                    <span class="main-text">Download Video Original</span>
+                    <span class="sub-text">Dengan Watermark TikTok</span>
+                  </div>
+                </div>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ YOUTUBE Result ═══ -->
+    <section id="ytResultState" class="result-state" style="display:none;">
+      <div class="result-grid">
+        <!-- YouTube Preview -->
+        <div class="preview-card glass-panel">
+          <div class="video-cover-container yt-cover">
+            <img id="ytCover" src="" alt="YouTube Thumbnail">
+            <div class="play-overlay yt-play">
+              <i data-lucide="youtube" class="play-icon yt-icon"></i>
+            </div>
+            <div class="views-badge">
+              <i data-lucide="eye" class="mini-icon"></i>
+              <span id="ytViewCount">0</span>
+            </div>
+          </div>
+          <div class="author-info">
+            <div class="yt-channel-icon"><i data-lucide="user"></i></div>
+            <div class="author-details">
+              <h4 id="ytChannel">Channel</h4>
+              <p id="ytDuration">Durasi: --</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- YouTube Download Options -->
+        <div class="download-card glass-panel">
+          <div class="meta-section">
+            <h3 class="video-title-label">Judul Video</h3>
+            <p id="ytTitle" class="video-title">Judul video...</p>
+            <div class="stats-row">
+              <div class="stat-item">
+                <i data-lucide="thumbs-up" class="stat-icon-heart"></i>
+                <span id="ytLikeCount">0</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="download-options">
+            <h3>Download Video MP4</h3>
+            <div class="buttons-stack" id="ytVideoFormats">
+              <!-- diisi JS -->
+            </div>
+
+            <h3 style="margin-top:1.5rem;">Download Audio MP3</h3>
+            <div class="buttons-stack">
+              <a id="ytDownloadMP3" href="#" class="dl-btn dl-audio">
+                <div class="dl-btn-content">
+                  <i data-lucide="music"></i>
+                  <div class="text-group">
+                    <span class="main-text">Download MP3</span>
+                    <span class="sub-text">Audio kualitas terbaik (.mp3)</span>
+                  </div>
+                </div>
+                <span class="badge audio">MP3</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>&copy; 2026 TikSave. TikTok & YouTube Downloader.</p>
+  </footer>
+
+  <div id="toast" class="toast" style="display:none;">
+    <i data-lucide="check-circle" class="toast-icon"></i>
+    <span id="toastMsg">Berhasil!</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
