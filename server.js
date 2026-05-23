@@ -35,8 +35,17 @@ async function ensureBinary() {
 const YTDLP_BIN = await ensureBinary();
 
 // ─── Cookies — validasi format dulu ──────────────────────────────────────────
-const COOKIES_PATH = '/etc/secrets/cookies.txt';
+const COOKIES_SECRET = '/etc/secrets/cookies.txt';
+const COOKIES_PATH   = path.join(__dirname, 'cookies_runtime.txt');
 let hasCookies = false;
+
+// Copy cookies ke folder writable supaya yt-dlp bisa update session
+if (fs.existsSync(COOKIES_SECRET)) {
+  try {
+    fs.copyFileSync(COOKIES_SECRET, COOKIES_PATH);
+    console.log('[cookies] ✅ Copied to runtime path');
+  } catch(e) { console.error('[cookies] copy error:', e.message); }
+}
 
 if (fs.existsSync(COOKIES_PATH)) {
   const content = fs.readFileSync(COOKIES_PATH, 'utf8').trim();
