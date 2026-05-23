@@ -18,17 +18,21 @@ app.use(express.static(path.join(__dirname, 'public')));
 async function ensureBinary() {
   const localBin = path.join(__dirname, 'node_modules', 'yt-dlp-exec', 'bin', 'yt-dlp');
   fs.mkdirSync(path.dirname(localBin), { recursive: true });
-  const isValid = fs.existsSync(localBin) && fs.statSync(localBin).size > 100000;
-  if (!isValid) {
-    console.log('[yt-dlp] Downloading binary...');
+
+  // Selalu download binary terbaru setiap server start
+  console.log('[yt-dlp] Downloading latest binary...');
+  try {
     execSync(
       `curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "${localBin}" && chmod +x "${localBin}"`,
       { timeout: 120000, stdio: 'inherit' }
     );
-  } else {
-    try { execSync(`chmod +x "${localBin}"`); } catch {}
+    const ver = execSync(`"${localBin}" --version`, { encoding: 'utf8' }).trim();
+    console.log('[yt-dlp] ✅ Version:', ver);
+  } catch (e) {
+    console.error('[yt-dlp] ❌ Gagal:', e.message);
+    // Fallback: pakai binary lama jika ada
+    if (!fs.existsSync(localBin)) throw new Error('yt-dlp binary tidak tersedia');
   }
-  console.log('[yt-dlp] ✅ Ready:', localBin);
   return localBin;
 }
 
@@ -73,7 +77,7 @@ function ytBaseArgs() {
     '--no-playlist',
     '--no-warnings',
     // tv_embedded & ios tidak kena bot-check karena dianggap app resmi
-    '--extractor-args', 'youtube:player_client=tv_embedded,ios',
+    '--extractor-args', 'youtube:player_client=ios,mweb,tv_embedded',
     '--add-header', 'User-Agent:com.google.ios.youtube/19.29.1 CFNetwork/1331.0.7 Darwin/21.4.0',
     '--geo-bypass',
     // Cookies wajib untuk tv_embedded client
