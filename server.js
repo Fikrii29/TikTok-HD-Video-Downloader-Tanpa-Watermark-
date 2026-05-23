@@ -2,9 +2,10 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Readable } from 'stream';
-import { spawn, execFile } from 'child_process';
-import { existsSync } from 'fs';
+import { spawn } from 'child_process';
 import ytDlp from 'yt-dlp-exec';
+import { YOUTUBE_DL_PATH } from './node_modules/yt-dlp-exec/src/constants.js';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -15,35 +16,11 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Resolve yt-dlp binary path ───────────────────────────────────────────────
-let YTDLP_BIN = 'yt-dlp';
-
-try {
-  const { default: ytDlpPath } = await import('yt-dlp-exec/src/constants.js').catch(() => ({}));
-  if (ytDlpPath?.YOUTUBE_DL_PATH) {
-    YTDLP_BIN = ytDlpPath.YOUTUBE_DL_PATH;
-  }
-} catch (_) {}
-
-try {
-  await new Promise((res, rej) => {
-    execFile(YTDLP_BIN, ['--version'], (err, stdout) => {
-      if (err) rej(err); else res(stdout.trim());
-    });
-  }).then(v => console.log(`[yt-dlp binary] ${YTDLP_BIN} — v${v}`));
-} catch {
-  console.warn(`[yt-dlp] Binary di "${YTDLP_BIN}" tidak bisa jalan, fallback ke PATH sistem`);
-  YTDLP_BIN = 'yt-dlp';
-}
-
-// ─── Cookies ──────────────────────────────────────────────────────────────────
+// ─── Cookies path ─────────────────────────────────────────────────────────────
 const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
-const hasCookies   = existsSync(COOKIES_PATH);
-if (hasCookies) {
-  console.log('[cookies] cookies.txt ditemukan, akan digunakan untuk YouTube');
-} else {
-  console.warn('[cookies] cookies.txt tidak ditemukan — YouTube mungkin memblokir permintaan');
-}
+const hasCookies   = fs.existsSync(COOKIES_PATH);
+console.log('[cookies]', hasCookies ? '✅ cookies.txt ditemukan' : '⚠️  cookies.txt tidak ada');
+console.log('[yt-dlp ]', YOUTUBE_DL_PATH);
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -55,19 +32,12 @@ function cleanTikTokUrl(url) {
   catch { return url; }
 }
 
-// Common args yt-dlp untuk YouTube
-function getYtArgs(extra = []) {
-  return [
-    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    '--add-header', 'Accept-Language:en-US,en;q=0.9',
-    '--no-check-certificates',
-    '--extractor-args', 'youtube:player_client=android,web',
-    ...(hasCookies ? ['--cookies', COOKIES_PATH] : []),
-    ...extra,
-  ];
+// Tambahkan --cookies jika file ada
+function cookiesArgs() {
+  return hasCookies ? ['--cookies', COOKIES_PATH] : [];
 }
 
-// ─── TikTok: info ─────────────────────────────────────────────────────────────
+// ─── TikTok: info via TikWM ───────────────────────────────────────────────────
 
 app.get('/api/download', async (req, res) => {
   let videoUrl = req.query.url;
@@ -88,7 +58,7 @@ app.get('/api/download', async (req, res) => {
 // ─── TikTok: stream proxy ─────────────────────────────────────────────────────
 
 app.get('/api/stream', async (req, res) => {
-  const fileUrl = req.query.url;
+  const fileUrl  = req.query.url;
   const filename = (req.query.filename || 'tiktok_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
   if (!fileUrl) return res.status(400).send('URL kosong');
 
@@ -120,68 +90,47 @@ app.get('/api/youtube/info', async (req, res) => {
 
   try {
     const meta = await ytDlp(videoUrl, {
-      dumpJson: true,
+      dumpJson:   true,
       noPlaylist: true,
-      noCheckCertificates: true,
-      ...(hasCookies ? { cookies: COOKIES_PATH } : {}),
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      extractorArgs: 'youtube:player_client=android,web',
+      ...(hasCookies && { cookies: COOKIES_PATH }),
+      // Tambahan agar tidak diblokir
+      addHeader: [
+        'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language:en-US,en;q=0.9'
+      ]
     });
 
     const seen = new Set();
     const formats = [];
-    const sorted = (meta.formats || []).sort((a, b) => (b.height || 0) - (a.height || 0));
-
-    for (const f of sorted) {
-      const hasVideo = f.vcodec && f.vcodec !== 'none';
-      const hasAudio = f.acodec && f.acodec !== 'none';
-      if (f.ext === 'mp4' && f.height && hasVideo && hasAudio && !seen.has(f.height)) {
+    for (const f of (meta.formats || []).sort((a,b)=>(b.height||0)-(a.height||0))) {
+      if (f.ext === 'mp4' && f.height && !seen.has(f.height)) {
         seen.add(f.height);
-        formats.push({ format_id: f.format_id, label: `${f.height}p`, height: f.height, merged: true });
+        formats.push({ format_id: f.format_id, label: `${f.height}p`, height: f.height });
         if (formats.length >= 5) break;
-      }
-    }
-
-    if (formats.length === 0) {
-      for (const f of sorted) {
-        const hasVideo = f.vcodec && f.vcodec !== 'none';
-        if ((f.ext === 'mp4' || f.ext === 'webm') && f.height && hasVideo && !seen.has(f.height)) {
-          seen.add(f.height);
-          formats.push({ format_id: f.format_id, label: `${f.height}p`, height: f.height, merged: false });
-          if (formats.length >= 5) break;
-        }
       }
     }
 
     return res.json({
       success: true,
       data: {
-        id: meta.id,
-        title: meta.title,
-        thumbnail: meta.thumbnail,
-        duration: meta.duration,
-        uploader: meta.uploader,
-        channel: meta.channel,
+        id:         meta.id,
+        title:      meta.title,
+        thumbnail:  meta.thumbnail,
+        duration:   meta.duration,
+        uploader:   meta.uploader,
+        channel:    meta.channel,
         view_count: meta.view_count,
         like_count: meta.like_count,
-        formats: formats.length ? formats : [{ format_id: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]', label: 'Best Quality', height: 0, merged: false }]
+        formats:    formats.length ? formats : [{ format_id: 'best', label: 'Best' }]
       }
     });
   } catch (err) {
     console.error('[YT info]', err.message);
-
-    let msg = 'Gagal menganalisis video YouTube.';
-    if (err.message.includes('Sign in') || err.message.includes('bot')) {
-      msg = hasCookies
-        ? 'YouTube memblokir permintaan. Coba perbarui cookies.txt.'
-        : 'YouTube memblokir permintaan. Tambahkan cookies.txt dari browser kamu.';
-    } else if (err.message.includes('unavailable') || err.message.includes('private')) {
-      msg = 'Video tidak tersedia atau bersifat privat.';
-    } else if (err.message.includes('copyright')) {
-      msg = 'Video tidak bisa diunduh karena pembatasan hak cipta.';
-    }
-
-    return res.status(500).json({ success: false, msg, detail: err.message });
+    const msg = err.message.includes('Sign in')  ? 'YouTube meminta login. Pastikan cookies.txt valid.' :
+                err.message.includes('blocked')   ? 'YouTube memblokir request. Perbarui cookies.txt.' :
+                err.message.includes('copyright') ? 'Video ini tidak tersedia di wilayah server.' :
+                'Gagal menganalisis video YouTube.';
+    return res.status(500).json({ success: false, msg });
   }
 });
 
@@ -190,87 +139,47 @@ app.get('/api/youtube/info', async (req, res) => {
 app.get('/api/youtube/download', (req, res) => {
   const videoUrl = req.query.url;
   const fmt      = req.query.fmt     || 'mp4';
-  const quality  = req.query.quality || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]';
+  const quality  = req.query.quality || 'best';
 
   if (!videoUrl || !isYouTube(videoUrl))
     return res.status(400).send('URL YouTube tidak valid');
 
   let ytArgs, filename, contentType;
 
+  const baseArgs = [
+    '--no-playlist',
+    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+    '--add-header', 'Accept-Language:en-US,en;q=0.9',
+    ...cookiesArgs()
+  ];
+
   if (fmt === 'mp3') {
-    ytArgs = getYtArgs([
-      '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-      '-o', '-', '--no-playlist', videoUrl,
-    ]);
+    ytArgs      = [...baseArgs, '-x', '--audio-format', 'mp3', '--audio-quality', '0', '-o', '-', videoUrl];
     filename    = `youtube_audio_${Date.now()}.mp3`;
     contentType = 'audio/mpeg';
   } else {
-    let fmtStr;
-    if (/^\d+$/.test(quality)) {
-      fmtStr = `${quality}+bestaudio[ext=m4a]/${quality}+bestaudio/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best`;
-    } else if (quality === 'best' || quality.startsWith('best')) {
-      fmtStr = `bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best`;
-    } else {
-      fmtStr = `${quality}/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best`;
-    }
-
-    ytArgs = getYtArgs([
-      '-f', fmtStr,
-      '--merge-output-format', 'mp4',
-      '-o', '-', '--no-playlist', videoUrl,
-    ]);
+    const fmtStr = quality !== 'best'
+      ? `${quality}+bestaudio[ext=m4a]/${quality}/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]`
+      : `bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]`;
+    ytArgs      = [...baseArgs, '-f', fmtStr, '--merge-output-format', 'mp4', '-o', '-', videoUrl];
     filename    = `youtube_video_${Date.now()}.mp4`;
     contentType = 'video/mp4';
   }
 
-  console.log('[YT DL] quality:', quality, 'url:', videoUrl);
+  console.log('[YT DL]', fmt, quality, videoUrl);
 
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Type', contentType);
 
-  const child = spawn(YTDLP_BIN, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-
+  const child = spawn(YOUTUBE_DL_PATH, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(res);
-
-  let stderrBuf = '';
-  child.stderr.on('data', d => {
-    stderrBuf += d.toString();
-    process.stderr.write(d);
-  });
-
-  child.on('close', code => {
-    if (code !== 0 && !res.headersSent) {
-      console.error('[YT DL] exit code', code, stderrBuf.slice(-300));
-      res.status(500).send('Download gagal. Coba lagi nanti.');
-    }
-  });
-
+  child.stderr.on('data', d => process.stderr.write(d));
   child.on('error', err => {
     console.error('[YT spawn]', err.message);
     if (!res.headersSent) res.status(500).send('Error: ' + err.message);
   });
-
-  req.on('close', () => {
-    if (!child.killed) child.kill();
-  });
+  req.on('close', () => child.kill());
 });
-
-// ─── Auto-update yt-dlp ───────────────────────────────────────────────────────
-
-async function tryUpdateYtDlp() {
-  try {
-    await new Promise((res, rej) => {
-      const p = spawn(YTDLP_BIN, ['-U'], { stdio: 'pipe' });
-      p.on('close', code => code === 0 || code === 1 || code === 100 ? res() : rej(new Error(`exit ${code}`)));
-      p.on('error', rej);
-    });
-    console.log('[yt-dlp] Sudah versi terbaru / update selesai');
-  } catch (err) {
-    console.warn('[yt-dlp] Gagal update (tidak fatal):', err.message);
-  }
-}
-
-tryUpdateYtDlp();
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
