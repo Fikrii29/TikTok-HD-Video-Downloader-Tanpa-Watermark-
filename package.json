@@ -5,6 +5,8 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
+    "postinstall": "node -e \"import('yt-dlp-exec').then(m=>m.default('--version')).catch(()=>{})\" || true",
+    "build": "npm install",
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
