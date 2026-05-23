@@ -3,7 +3,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Readable } from 'stream';
 import { spawn, execSync } from 'child_process';
-import ytDlp from 'yt-dlp-exec';
 import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,55 +14,60 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Resolve yt-dlp binary ───────────────────────────────────────────────────
+// ─── Ensure yt-dlp binary ────────────────────────────────────────────────────
 async function ensureBinary() {
   const localBin = path.join(__dirname, 'node_modules', 'yt-dlp-exec', 'bin', 'yt-dlp');
   fs.mkdirSync(path.dirname(localBin), { recursive: true });
-
   const isValid = fs.existsSync(localBin) && fs.statSync(localBin).size > 100000;
-
   if (!isValid) {
-    console.log('[yt-dlp] Mendownload binary...');
-    try {
-      execSync(
-        `curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "${localBin}" && chmod +x "${localBin}"`,
-        { timeout: 120000, stdio: 'inherit' }
-      );
-      console.log('[yt-dlp] ✅ Binary downloaded');
-    } catch (e) {
-      console.error('[yt-dlp] ❌ Download gagal:', e.message);
-    }
+    console.log('[yt-dlp] Downloading binary...');
+    execSync(
+      `curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "${localBin}" && chmod +x "${localBin}"`,
+      { timeout: 120000, stdio: 'inherit' }
+    );
   } else {
     try { execSync(`chmod +x "${localBin}"`); } catch {}
-    console.log('[yt-dlp] ✅ Binary OK:', localBin);
   }
+  console.log('[yt-dlp] ✅ Ready:', localBin);
   return localBin;
 }
 
-const YTDLP_BIN    = await ensureBinary();
+const YTDLP_BIN = await ensureBinary();
+
+// ─── Cookies — validasi format dulu ──────────────────────────────────────────
 const COOKIES_PATH = '/etc/secrets/cookies.txt';
-const hasCookies   = fs.existsSync(COOKIES_PATH);
-console.log('[cookies]', hasCookies ? '✅ ditemukan' : '⚠️  tidak ada');
+let hasCookies = false;
+
+if (fs.existsSync(COOKIES_PATH)) {
+  const content = fs.readFileSync(COOKIES_PATH, 'utf8').trim();
+  // Cookies valid harus diawali # Netscape atau langsung ada tab-separated data
+  if (content.startsWith('# Netscape') || content.includes('\t')) {
+    hasCookies = true;
+    console.log('[cookies] ✅ Valid Netscape format');
+  } else {
+    console.log('[cookies] ⚠️  Format tidak valid, cookies dinonaktifkan');
+    console.log('[cookies] Preview:', content.slice(0, 100));
+  }
+} else {
+  console.log('[cookies] ⚠️  File tidak ditemukan');
+}
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
-function isTikTok(url)  { return /tiktok\.com|vm\.tiktok\.com/.test(url); }
 function isYouTube(url) { return /youtube\.com|youtu\.be/.test(url); }
 function cleanTikTokUrl(url) {
   try { const p = new URL(url); return p.origin + p.pathname; } catch { return url; }
 }
 
-// Args dasar untuk semua request YouTube
-function ytBaseArgs(url) {
+// Base args YouTube — tanpa cookies jika tidak valid
+function ytBaseArgs() {
   return [
     '--no-playlist',
     '--no-warnings',
-    // Bypass 429 & bot detection
     '--extractor-args', 'youtube:player_client=web,mweb',
-    '--sleep-requests', '1',
     '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    '--add-header', 'Accept-Language:en-US,en;q=0.9',
+    '--add-header', 'Accept-Language:id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+    '--geo-bypass',
     ...(hasCookies ? ['--cookies', COOKIES_PATH] : []),
-    url
   ];
 }
 
@@ -107,43 +111,29 @@ app.get('/api/youtube/info', async (req, res) => {
   if (!videoUrl || !isYouTube(videoUrl))
     return res.status(400).json({ success: false, msg: 'URL YouTube tidak valid' });
 
-  try {
-    const args = [
-      '--dump-json',
-      '--no-playlist',
-      '--no-warnings',
-      '--extractor-args', 'youtube:player_client=web,mweb',
-      '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-      '--add-header', 'Accept-Language:en-US,en;q=0.9',
-      ...(hasCookies ? ['--cookies', COOKIES_PATH] : []),
-      videoUrl
-    ];
+  const args = [...ytBaseArgs(), '--dump-json', videoUrl];
 
+  try {
     const result = await new Promise((resolve, reject) => {
-      let stdout = '';
-      let stderr = '';
+      let stdout = '', stderr = '';
       const child = spawn(YTDLP_BIN, args);
       child.stdout.on('data', d => stdout += d);
       child.stderr.on('data', d => stderr += d);
-      child.on('close', code => {
-        if (code === 0) resolve(stdout);
-        else reject(new Error(stderr.slice(-500)));
-      });
+      child.on('close', code => code === 0 ? resolve(stdout) : reject(new Error(stderr.slice(-800))));
     });
 
     const meta = JSON.parse(result);
 
-    // Kumpulkan format terbaik — support mp4 DAN webm
     const seen = new Set();
     const formats = [];
     const sorted = (meta.formats || [])
-      .filter(f => f.height && (f.ext === 'mp4' || f.ext === 'webm') && f.vcodec !== 'none')
+      .filter(f => f.height && f.vcodec !== 'none')
       .sort((a,b) => (b.height||0) - (a.height||0));
 
     for (const f of sorted) {
       if (!seen.has(f.height)) {
         seen.add(f.height);
-        formats.push({ format_id: f.format_id, label: `${f.height}p`, height: f.height, ext: f.ext });
+        formats.push({ format_id: f.format_id, label: `${f.height}p`, height: f.height });
         if (formats.length >= 5) break;
       }
     }
@@ -154,14 +144,14 @@ app.get('/api/youtube/info', async (req, res) => {
         id: meta.id, title: meta.title, thumbnail: meta.thumbnail,
         duration: meta.duration, uploader: meta.uploader, channel: meta.channel,
         view_count: meta.view_count, like_count: meta.like_count,
-        formats: formats.length ? formats : [{ format_id: 'bestvideo+bestaudio', label: 'Best', ext: 'mp4' }]
+        formats: formats.length ? formats : [{ format_id: 'best', label: 'Best' }]
       }
     });
   } catch (err) {
-    console.error('[YT info]', err.message.slice(0, 300));
-    const msg = err.message.includes('429')
-      ? 'YouTube rate limit. Coba lagi dalam beberapa detik.'
-      : 'Gagal menganalisis video YouTube.';
+    console.error('[YT info]', err.message.slice(0, 400));
+    const msg = err.message.includes('429') ? 'YouTube rate limit, coba lagi dalam 30 detik.'
+              : err.message.includes('Sign in') ? 'Video membutuhkan login YouTube.'
+              : 'Gagal menganalisis video YouTube.';
     return res.status(500).json({ success: false, msg });
   }
 });
@@ -174,26 +164,17 @@ app.get('/api/youtube/download', (req, res) => {
 
   if (!videoUrl || !isYouTube(videoUrl)) return res.status(400).send('URL tidak valid');
 
-  const baseArgs = [
-    '--no-playlist',
-    '--no-warnings',
-    '--extractor-args', 'youtube:player_client=web,mweb',
-    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-    ...(hasCookies ? ['--cookies', COOKIES_PATH] : []),
-  ];
-
   let ytArgs, filename, contentType;
 
   if (fmt === 'mp3') {
-    ytArgs      = [...baseArgs, '-x', '--audio-format', 'mp3', '--audio-quality', '0', '-o', '-', videoUrl];
+    ytArgs      = [...ytBaseArgs(), '-x', '--audio-format', 'mp3', '--audio-quality', '0', '-o', '-', videoUrl];
     filename    = `youtube_audio_${Date.now()}.mp3`;
     contentType = 'audio/mpeg';
   } else {
-    // Format fleksibel: coba format_id dulu, fallback ke best
     const fmtStr = quality !== 'best'
       ? `${quality}+bestaudio/${quality}/bestvideo+bestaudio/best`
       : `bestvideo+bestaudio/best`;
-    ytArgs      = [...baseArgs, '-f', fmtStr, '--merge-output-format', 'mp4', '-o', '-', videoUrl];
+    ytArgs      = [...ytBaseArgs(), '-f', fmtStr, '--merge-output-format', 'mp4', '-o', '-', videoUrl];
     filename    = `youtube_video_${Date.now()}.mp4`;
     contentType = 'video/mp4';
   }
@@ -205,9 +186,7 @@ app.get('/api/youtube/download', (req, res) => {
   const child = spawn(YTDLP_BIN, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(res);
   child.stderr.on('data', d => process.stderr.write(d));
-  child.on('error', err => {
-    if (!res.headersSent) res.status(500).send('Error: ' + err.message);
-  });
+  child.on('error', err => { if (!res.headersSent) res.status(500).send('Error: ' + err.message); });
   req.on('close', () => child.kill());
 });
 
