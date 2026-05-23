@@ -186,3 +186,16 @@ app.listen(PORT, () => {
   console.log(` TikSave aktif → http://localhost:${PORT}`);
   console.log(`==================================================`);
 });
+
+// ─── DEBUG: lihat raw response API ───────────────────────────────────────────
+app.get('/api/debug/yt', async (req, res) => {
+  const videoId = req.query.id || 'dQw4w9WgXcQ';
+  if (!RAPIDAPI_KEY) return res.json({ error: 'No API key' });
+
+  const [details, mp3] = await Promise.all([
+    fetch(`https://${RAPIDAPI_HOST}/v2/video/details?videoId=${videoId}`, { headers: rapidHeaders() }).then(r=>r.json()),
+    fetch(`https://${RAPIDAPI_HOST}/v2/video/mp3?videoId=${videoId}&quality=high`, { headers: rapidHeaders() }).then(r=>r.json()),
+  ]);
+
+  res.json({ details_keys: Object.keys(details), videos_sample: details?.videos?.items?.slice(0,2), audios_sample: details?.audios?.items?.slice(0,2), mp3_response: mp3 });
+});
