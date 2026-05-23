@@ -72,10 +72,11 @@ function ytBaseArgs() {
   return [
     '--no-playlist',
     '--no-warnings',
-    '--extractor-args', 'youtube:player_client=web,mweb',
-    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    '--add-header', 'Accept-Language:id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+    // tv_embedded & ios tidak kena bot-check karena dianggap app resmi
+    '--extractor-args', 'youtube:player_client=tv_embedded,ios',
+    '--add-header', 'User-Agent:com.google.ios.youtube/19.29.1 CFNetwork/1331.0.7 Darwin/21.4.0',
     '--geo-bypass',
+    // Cookies wajib untuk tv_embedded client
     ...(hasCookies ? ['--cookies', COOKIES_PATH] : []),
   ];
 }
