@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Readable } from 'stream';
-import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,75 +13,27 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Ensure yt-dlp binary ────────────────────────────────────────────────────
-async function ensureBinary() {
-  const localBin = path.join(__dirname, 'node_modules', 'yt-dlp-exec', 'bin', 'yt-dlp');
-  fs.mkdirSync(path.dirname(localBin), { recursive: true });
+// ─── Config ───────────────────────────────────────────────────────────────────
+const RAPIDAPI_KEY  = process.env.RAPIDAPI_KEY || '';
+const RAPIDAPI_HOST = 'youtube-media-downloader.p.rapidapi.com';
 
-  // Selalu download binary terbaru setiap server start
-  console.log('[yt-dlp] Downloading latest binary...');
-  try {
-    execSync(
-      `curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "${localBin}" && chmod +x "${localBin}"`,
-      { timeout: 120000, stdio: 'inherit' }
-    );
-    const ver = execSync(`"${localBin}" --version`, { encoding: 'utf8' }).trim();
-    console.log('[yt-dlp] ✅ Version:', ver);
-  } catch (e) {
-    console.error('[yt-dlp] ❌ Gagal:', e.message);
-    // Fallback: pakai binary lama jika ada
-    if (!fs.existsSync(localBin)) throw new Error('yt-dlp binary tidak tersedia');
-  }
-  return localBin;
-}
-
-const YTDLP_BIN = await ensureBinary();
-
-// ─── Cookies — validasi format dulu ──────────────────────────────────────────
-const COOKIES_SECRET = '/etc/secrets/cookies.txt';
-const COOKIES_PATH   = path.join(__dirname, 'cookies_runtime.txt');
-let hasCookies = false;
-
-// Copy cookies ke folder writable supaya yt-dlp bisa update session
-if (fs.existsSync(COOKIES_SECRET)) {
-  try {
-    fs.copyFileSync(COOKIES_SECRET, COOKIES_PATH);
-    console.log('[cookies] ✅ Copied to runtime path');
-  } catch(e) { console.error('[cookies] copy error:', e.message); }
-}
-
-if (fs.existsSync(COOKIES_PATH)) {
-  const content = fs.readFileSync(COOKIES_PATH, 'utf8').trim();
-  // Cookies valid harus diawali # Netscape atau langsung ada tab-separated data
-  if (content.startsWith('# Netscape') || content.includes('\t')) {
-    hasCookies = true;
-    console.log('[cookies] ✅ Valid Netscape format');
-  } else {
-    console.log('[cookies] ⚠️  Format tidak valid, cookies dinonaktifkan');
-    console.log('[cookies] Preview:', content.slice(0, 100));
-  }
-} else {
-  console.log('[cookies] ⚠️  File tidak ditemukan');
-}
+console.log('[RapidAPI]', RAPIDAPI_KEY ? '✅ Key tersedia' : '⚠️  RAPIDAPI_KEY belum diset!');
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 function isYouTube(url) { return /youtube\.com|youtu\.be/.test(url); }
 function cleanTikTokUrl(url) {
   try { const p = new URL(url); return p.origin + p.pathname; } catch { return url; }
 }
+function getVideoId(url) {
+  const m = url.match(/(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
 
-// Base args YouTube — tanpa cookies jika tidak valid
-function ytBaseArgs() {
-  return [
-    '--no-playlist',
-    '--no-warnings',
-    // tv_embedded & ios tidak kena bot-check karena dianggap app resmi
-    '--extractor-args', 'youtube:player_client=ios,mweb,tv_embedded',
-    '--add-header', 'User-Agent:com.google.ios.youtube/19.29.1 CFNetwork/1331.0.7 Darwin/21.4.0',
-    '--geo-bypass',
-    // Cookies wajib untuk tv_embedded client
-    ...(hasCookies ? ['--cookies', COOKIES_PATH] : []),
-  ];
+function rapidHeaders() {
+  return {
+    'x-rapidapi-key':  RAPIDAPI_KEY,
+    'x-rapidapi-host': RAPIDAPI_HOST
+  };
 }
 
 // ─── TikTok: info ─────────────────────────────────────────────────────────────
@@ -119,89 +70,131 @@ app.get('/api/stream', async (req, res) => {
   }
 });
 
-// ─── YouTube: info ────────────────────────────────────────────────────────────
+// ─── YouTube: info via RapidAPI ───────────────────────────────────────────────
 app.get('/api/youtube/info', async (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl || !isYouTube(videoUrl))
     return res.status(400).json({ success: false, msg: 'URL YouTube tidak valid' });
+  if (!RAPIDAPI_KEY)
+    return res.status(500).json({ success: false, msg: 'RAPIDAPI_KEY belum diset di Render Environment Variables.' });
 
-  const args = [...ytBaseArgs(), '--dump-json', videoUrl];
+  const videoId = getVideoId(videoUrl);
+  if (!videoId)
+    return res.status(400).json({ success: false, msg: 'Video ID tidak ditemukan.' });
 
   try {
-    const result = await new Promise((resolve, reject) => {
-      let stdout = '', stderr = '';
-      const child = spawn(YTDLP_BIN, args);
-      child.stdout.on('data', d => stdout += d);
-      child.stderr.on('data', d => stderr += d);
-      child.on('close', code => code === 0 ? resolve(stdout) : reject(new Error(stderr.slice(-800))));
-    });
+    const r = await fetch(
+      `https://${RAPIDAPI_HOST}/v2/video/details?videoId=${videoId}`,
+      { headers: rapidHeaders() }
+    );
+    const data = await r.json();
+    console.log('[YT info] status:', r.status, '| title:', data?.title?.slice(0,50));
 
-    const meta = JSON.parse(result);
+    if (!data || r.status !== 200) throw new Error(data?.message || 'Gagal ambil info');
 
-    const seen = new Set();
+    // Ambil format video yang tersedia
     const formats = [];
-    const sorted = (meta.formats || [])
-      .filter(f => f.height && f.vcodec !== 'none')
-      .sort((a,b) => (b.height||0) - (a.height||0));
-
-    for (const f of sorted) {
-      if (!seen.has(f.height)) {
-        seen.add(f.height);
-        formats.push({ format_id: f.format_id, label: `${f.height}p`, height: f.height });
-        if (formats.length >= 5) break;
+    const seen = new Set();
+    const streams = data?.videos?.items || [];
+    for (const f of streams) {
+      const h = f.height || 0;
+      const label = h ? `${h}p` : (f.qualityLabel || 'Best');
+      if (!seen.has(label) && f.url) {
+        seen.add(label);
+        formats.push({ format_id: f.itag || label, label, height: h, url: f.url });
       }
+      if (formats.length >= 5) break;
     }
 
     return res.json({
       success: true,
       data: {
-        id: meta.id, title: meta.title, thumbnail: meta.thumbnail,
-        duration: meta.duration, uploader: meta.uploader, channel: meta.channel,
-        view_count: meta.view_count, like_count: meta.like_count,
-        formats: formats.length ? formats : [{ format_id: 'best', label: 'Best' }]
+        id:         videoId,
+        title:      data.title || 'YouTube Video',
+        thumbnail:  data.thumbnails?.at(-1)?.url || `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+        duration:   data.lengthSeconds,
+        channel:    data.author?.title || '',
+        view_count: data.viewCount,
+        like_count: null,
+        formats:    formats.length ? formats : [{ format_id: 'best', label: 'Best', height: 0 }]
       }
     });
   } catch (err) {
-    console.error('[YT info]', err.message.slice(0, 400));
-    const msg = err.message.includes('429') ? 'YouTube rate limit, coba lagi dalam 30 detik.'
-              : err.message.includes('Sign in') ? 'Video membutuhkan login YouTube.'
-              : 'Gagal menganalisis video YouTube.';
-    return res.status(500).json({ success: false, msg });
+    console.error('[YT info error]', err.message);
+    return res.status(500).json({ success: false, msg: 'Gagal menganalisis video: ' + err.message });
   }
 });
 
-// ─── YouTube: download ────────────────────────────────────────────────────────
-app.get('/api/youtube/download', (req, res) => {
+// ─── YouTube: download stream ─────────────────────────────────────────────────
+app.get('/api/youtube/download', async (req, res) => {
   const videoUrl = req.query.url;
   const fmt      = req.query.fmt     || 'mp4';
   const quality  = req.query.quality || 'best';
 
   if (!videoUrl || !isYouTube(videoUrl)) return res.status(400).send('URL tidak valid');
+  if (!RAPIDAPI_KEY) return res.status(500).send('RAPIDAPI_KEY belum diset');
 
-  let ytArgs, filename, contentType;
+  const videoId = getVideoId(videoUrl);
+  if (!videoId) return res.status(400).send('Video ID tidak valid');
 
-  if (fmt === 'mp3') {
-    ytArgs      = [...ytBaseArgs(), '-x', '--audio-format', 'mp3', '--audio-quality', '0', '-o', '-', videoUrl];
-    filename    = `youtube_audio_${Date.now()}.mp3`;
-    contentType = 'audio/mpeg';
-  } else {
-    const fmtStr = quality !== 'best'
-      ? `${quality}+bestaudio/${quality}/bestvideo+bestaudio/best`
-      : `bestvideo+bestaudio/best`;
-    ytArgs      = [...ytBaseArgs(), '-f', fmtStr, '--merge-output-format', 'mp4', '-o', '-', videoUrl];
-    filename    = `youtube_video_${Date.now()}.mp4`;
-    contentType = 'video/mp4';
+  try {
+    if (fmt === 'mp3') {
+      // ── MP3 ──────────────────────────────────────────────────────────────
+      const r = await fetch(
+        `https://${RAPIDAPI_HOST}/v2/video/mp3?videoId=${videoId}&quality=high`,
+        { headers: rapidHeaders() }
+      );
+      const data = await r.json();
+      console.log('[YT MP3]', JSON.stringify(data).slice(0, 200));
+
+      const mp3Url = data?.url || data?.downloadUrl || data?.link;
+      if (!mp3Url) throw new Error('Link MP3 tidak tersedia: ' + JSON.stringify(data).slice(0,100));
+
+      const file = await fetch(mp3Url);
+      if (!file.ok) throw new Error(`CDN MP3 error: ${file.status}`);
+
+      res.setHeader('Content-Disposition', `attachment; filename="youtube_${videoId}.mp3"`);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      const cl = file.headers.get('content-length');
+      if (cl) res.setHeader('Content-Length', cl);
+      Readable.fromWeb(file.body).pipe(res);
+
+    } else {
+      // ── MP4 ──────────────────────────────────────────────────────────────
+      // Ambil info dulu untuk dapat URL stream langsung
+      const r = await fetch(
+        `https://${RAPIDAPI_HOST}/v2/video/details?videoId=${videoId}`,
+        { headers: rapidHeaders() }
+      );
+      const data = await r.json();
+      const streams = data?.videos?.items || [];
+
+      // Pilih resolusi yang diminta, fallback ke terbaik
+      let chosen = streams.find(f => String(f.height) === String(quality) && f.url)
+                || streams.find(f => f.height >= 720 && f.url)
+                || streams.find(f => f.url)
+                || null;
+
+      if (!chosen?.url) throw new Error('Format video tidak tersedia');
+
+      console.log('[YT MP4] Chosen:', chosen.height + 'p', chosen.qualityLabel);
+
+      const file = await fetch(chosen.url, {
+        headers: { 'Referer': 'https://www.youtube.com/' }
+      });
+      if (!file.ok) throw new Error(`CDN MP4 error: ${file.status}`);
+
+      const label = chosen.height ? `${chosen.height}p` : 'hd';
+      res.setHeader('Content-Disposition', `attachment; filename="youtube_${videoId}_${label}.mp4"`);
+      res.setHeader('Content-Type', 'video/mp4');
+      const cl = file.headers.get('content-length');
+      if (cl) res.setHeader('Content-Length', cl);
+      Readable.fromWeb(file.body).pipe(res);
+    }
+  } catch (err) {
+    console.error('[YT DL error]', err.message);
+    if (!res.headersSent) res.status(500).send('Gagal download: ' + err.message);
   }
-
-  console.log('[YT DL]', fmt, quality);
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Type', contentType);
-
-  const child = spawn(YTDLP_BIN, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.pipe(res);
-  child.stderr.on('data', d => process.stderr.write(d));
-  child.on('error', err => { if (!res.headersSent) res.status(500).send('Error: ' + err.message); });
-  req.on('close', () => child.kill());
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
