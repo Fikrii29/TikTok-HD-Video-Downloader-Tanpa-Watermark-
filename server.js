@@ -125,43 +125,36 @@ app.get('/api/youtube/info', async (req, res) => {
   }
 });
 
-// ─── YouTube: download stream ─────────────────────────────────────────────────
+// ─── YouTube: get direct download URL (kirim ke browser, bukan proxy) ────────
 app.get('/api/youtube/download', async (req, res) => {
   const videoUrl = req.query.url;
   const fmt      = req.query.fmt     || 'mp4';
   const quality  = req.query.quality || 'best';
 
-  if (!videoUrl || !isYouTube(videoUrl)) return res.status(400).send('URL tidak valid');
-  if (!RAPIDAPI_KEY) return res.status(500).send('RAPIDAPI_KEY belum diset');
+  if (!videoUrl || !isYouTube(videoUrl)) return res.status(400).json({ error: 'URL tidak valid' });
+  if (!RAPIDAPI_KEY) return res.status(500).json({ error: 'RAPIDAPI_KEY belum diset' });
 
   const videoId = getVideoId(videoUrl);
-  if (!videoId) return res.status(400).send('Video ID tidak valid');
+  if (!videoId) return res.status(400).json({ error: 'Video ID tidak valid' });
 
   try {
     if (fmt === 'mp3') {
-      // ── MP3 ──────────────────────────────────────────────────────────────
+      // ── MP3: ambil link langsung ────────────────────────────────────────
       const r = await fetch(
         `https://${RAPIDAPI_HOST}/v2/video/mp3?videoId=${videoId}&quality=high`,
         { headers: rapidHeaders() }
       );
       const data = await r.json();
-      console.log('[YT MP3]', JSON.stringify(data).slice(0, 200));
+      console.log('[YT MP3]', JSON.stringify(data).slice(0, 300));
 
-      const mp3Url = data?.url || data?.downloadUrl || data?.link;
-      if (!mp3Url) throw new Error('Link MP3 tidak tersedia: ' + JSON.stringify(data).slice(0,100));
+      const mp3Url = data?.url || data?.downloadUrl || data?.link || data?.audio?.url;
+      if (!mp3Url) throw new Error('Link MP3 tidak tersedia');
 
-      const file = await fetch(mp3Url);
-      if (!file.ok) throw new Error(`CDN MP3 error: ${file.status}`);
-
-      res.setHeader('Content-Disposition', `attachment; filename="youtube_${videoId}.mp3"`);
-      res.setHeader('Content-Type', 'audio/mpeg');
-      const cl = file.headers.get('content-length');
-      if (cl) res.setHeader('Content-Length', cl);
-      Readable.fromWeb(file.body).pipe(res);
+      // Redirect langsung ke URL — browser yang download
+      return res.redirect(mp3Url);
 
     } else {
-      // ── MP4 ──────────────────────────────────────────────────────────────
-      // Ambil info dulu untuk dapat URL stream langsung
+      // ── MP4: ambil URL dari video details ──────────────────────────────
       const r = await fetch(
         `https://${RAPIDAPI_HOST}/v2/video/details?videoId=${videoId}`,
         { headers: rapidHeaders() }
@@ -169,7 +162,6 @@ app.get('/api/youtube/download', async (req, res) => {
       const data = await r.json();
       const streams = data?.videos?.items || [];
 
-      // Pilih resolusi yang diminta, fallback ke terbaik
       let chosen = streams.find(f => String(f.height) === String(quality) && f.url)
                 || streams.find(f => f.height >= 720 && f.url)
                 || streams.find(f => f.url)
@@ -177,23 +169,14 @@ app.get('/api/youtube/download', async (req, res) => {
 
       if (!chosen?.url) throw new Error('Format video tidak tersedia');
 
-      console.log('[YT MP4] Chosen:', chosen.height + 'p', chosen.qualityLabel);
+      console.log('[YT MP4] Chosen:', chosen.height + 'p');
 
-      const file = await fetch(chosen.url, {
-        headers: { 'Referer': 'https://www.youtube.com/' }
-      });
-      if (!file.ok) throw new Error(`CDN MP4 error: ${file.status}`);
-
-      const label = chosen.height ? `${chosen.height}p` : 'hd';
-      res.setHeader('Content-Disposition', `attachment; filename="youtube_${videoId}_${label}.mp4"`);
-      res.setHeader('Content-Type', 'video/mp4');
-      const cl = file.headers.get('content-length');
-      if (cl) res.setHeader('Content-Length', cl);
-      Readable.fromWeb(file.body).pipe(res);
+      // Redirect langsung ke URL — browser yang download
+      return res.redirect(chosen.url);
     }
   } catch (err) {
     console.error('[YT DL error]', err.message);
-    if (!res.headersSent) res.status(500).send('Gagal download: ' + err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Gagal: ' + err.message });
   }
 });
 
